@@ -8,131 +8,427 @@
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100 min-h-screen">
-    <div id="app" class="flex flex-col md:flex-row min-h-screen">
-        
-        <!-- Sidebar: Sessions -->
-        <div class="w-full md:w-64 bg-slate-800 text-white p-6">
-            <h1 class="text-xl font-bold mb-6">🗳️ Voting Tool</h1>
-            <div class="mb-4">
-                <input v-model="newSessionName" @keyup.enter="createSession" placeholder="New topic..." 
-                       class="w-full p-2 text-black text-sm rounded">
-                <button @click="createSession" class="w-full mt-2 bg-blue-600 hover:bg-blue-500 p-2 rounded text-sm font-bold transition">Add Session</button>
-            </div>
-            <nav>
-                <div v-for="s in sessions" :key="s.id" 
-                     @click="currentSession = s"
-                     :class="['p-3 rounded mb-2 cursor-pointer transition', currentSession?.id === s.id ? 'bg-blue-600' : 'hover:bg-slate-700']">
-                    {{ s.name }}
-                </div>
-            </nav>
+<div id="app" class="flex flex-col min-h-screen">
+
+    <!-- Top bar -->
+    <header class="bg-slate-900 text-white px-6 py-3 flex items-center justify-between shadow-md z-10">
+        <span class="text-lg font-bold">🗳️ Voting Tool</span>
+        <!-- Logged in -->
+        <div v-if="currentUser" class="flex items-center gap-3">
+            <span class="text-sm font-medium text-slate-300">👤 {{ currentUser.username }}</span>
+            <button @click="logout" class="text-xs bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded transition">Sign out</button>
         </div>
+        <!-- Not logged in -->
+        <div v-else class="flex items-center gap-2">
+            <button @click="showAuth = 'login'" class="text-xs bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded transition font-semibold">Sign in</button>
+            <button @click="showAuth = 'register'" class="text-xs bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded transition font-semibold">Sign up</button>
+        </div>
+    </header>
 
-        <!-- Main Content -->
-        <main class="flex-1 p-4 md:p-10">
+    <div class="flex flex-1 overflow-hidden">
+
+        <!-- Sidebar -->
+        <aside class="w-full md:w-64 bg-slate-800 text-white p-6 flex flex-col gap-6 shrink-0">
+
+            <!-- Create session (everyone) -->
+            <div>
+                <p class="text-xs text-slate-400 uppercase font-semibold mb-2">New Session</p>
+                <input v-model="newSessionName" @keyup.enter="createSession" placeholder="Topic name..."
+                       class="w-full p-2 text-black text-sm rounded mb-2">
+                <button @click="createSession"
+                        class="w-full bg-blue-600 hover:bg-blue-500 p-2 rounded text-sm font-bold transition">
+                    Create &amp; Open
+                </button>
+            </div>
+
+            <!-- Share link -->
             <div v-if="currentSession">
-                <div class="flex justify-between items-center mb-8">
-                    <h2 class="text-3xl font-extrabold text-gray-800">{{ currentSession.name }}</h2>
+                <p class="text-xs text-slate-400 uppercase font-semibold mb-2">Share this session</p>
+                <div class="flex gap-2">
+                    <input :value="shareUrl" readonly
+                           class="flex-1 min-w-0 p-2 text-black text-xs rounded truncate">
+                    <button @click="copyUrl"
+                            class="bg-slate-600 hover:bg-slate-500 px-3 rounded text-xs transition flex-shrink-0">
+                        {{ copied ? '✓' : 'Copy' }}
+                    </button>
                 </div>
+            </div>
 
-                <!-- Add Item -->
-                <div class="flex gap-2 mb-8 bg-white p-4 rounded-lg shadow-sm">
-                    <input v-model="newItemText" @keyup.enter="addItem" placeholder="Enter an option..." 
+            <!-- Manage permissions -->
+            <div v-if="myPerms.can_edit_permissions">
+                <button @click="showPermissions = true"
+                        class="w-full bg-slate-600 hover:bg-slate-500 p-2 rounded text-sm font-bold transition">
+                    ⚙️ Manage Permissions
+                </button>
+            </div>
+
+            <!-- Delete session -->
+            <div v-if="myPerms.can_remove_session" class="mt-auto">
+                <button @click="deleteSession"
+                        class="w-full bg-red-800 hover:bg-red-700 p-2 rounded text-sm font-bold transition">
+                    🗑 Delete Session
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <main class="flex-1 p-4 md:p-10 overflow-y-auto">
+            <div v-if="currentSession">
+                <h2 class="text-3xl font-extrabold text-gray-800 mb-8">{{ currentSession.name }}</h2>
+
+                <!-- Add item -->
+                <div v-if="myPerms.can_add_items" class="flex gap-2 mb-8 bg-white p-4 rounded-lg shadow-sm">
+                    <input v-model="newItemText" @keyup.enter="addItem" placeholder="Enter an option..."
                            class="flex-1 border p-3 rounded-lg outline-blue-500">
-                    <button @click="addItem" class="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-500 transition">Add Item</button>
+                    <button @click="addItem"
+                            class="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-500 transition">Add</button>
                 </div>
 
-                <!-- Items List -->
+                <!-- Sort controls -->
+                <div class="flex items-center gap-2 mb-4 text-sm">
+                    <span class="text-gray-500 font-medium">Sort by:</span>
+                    <button v-for="opt in sortOptions" :key="opt.value" @click="setSort(opt.value)"
+                            :class="['px-3 py-1 rounded-full border font-medium transition',
+                                     sortBy === opt.value
+                                         ? 'bg-slate-700 text-white border-slate-700'
+                                         : 'bg-white text-gray-600 border-gray-300 hover:border-slate-400']">
+                        {{ opt.label }}<span v-if="sortBy === opt.value">{{ sortAsc ? ' ↑' : ' ↓' }}</span>
+                    </button>
+                </div>
+
+                <!-- Items list -->
                 <div class="space-y-4">
-                    <div v-for="item in items" :key="item.id" 
-                         class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex items-center justify-between transition hover:shadow-md">
-                        <span class="text-lg font-medium text-gray-700">{{ item.text }}</span>
-                        
-                        <div class="flex items-center gap-4 bg-gray-50 p-2 rounded-lg">
-                            <button @click="vote(item.id, 1)" 
-                                    :class="['w-10 h-10 rounded-full flex items-center justify-center transition shadow-sm', 
-                                             item.user_vote === 1 ? 'bg-green-500 text-white scale-110' : 'bg-white hover:bg-green-100 text-green-600']">
-                                ▲
-                            </button>
-                            
-                            <span :class="['font-bold text-xl min-w-[1.5rem] text-center', 
+                    <div v-for="item in sortedItems" :key="item.id"
+                         class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex items-center justify-between transition hover:shadow-md group">
+                        <span class="text-lg font-medium text-gray-700 flex-1 mr-4">{{ item.text }}</span>
+                        <div class="flex items-center gap-3 bg-gray-50 p-2 rounded-lg">
+                            <button v-if="myPerms.can_vote" @click="vote(item.id, 1)"
+                                    :class="['w-10 h-10 rounded-full flex items-center justify-center transition shadow-sm',
+                                             item.user_vote === 1 ? 'bg-green-500 text-white scale-110' : 'bg-white hover:bg-green-100 text-green-600']">▲</button>
+                            <span :class="['font-bold text-xl min-w-[1.5rem] text-center',
                                           item.score > 0 ? 'text-green-600' : item.score < 0 ? 'text-red-600' : 'text-gray-400']">
                                 {{ item.score || 0 }}
                             </span>
-
-                            <button @click="vote(item.id, -1)" 
-                                    :class="['w-10 h-10 rounded-full flex items-center justify-center transition shadow-sm', 
-                                             item.user_vote === -1 ? 'bg-red-500 text-white scale-110' : 'bg-white hover:bg-red-100 text-red-600']">
-                                ▼
-                            </button>
+                            <button v-if="myPerms.can_vote" @click="vote(item.id, -1)"
+                                    :class="['w-10 h-10 rounded-full flex items-center justify-center transition shadow-sm',
+                                             item.user_vote === -1 ? 'bg-red-500 text-white scale-110' : 'bg-white hover:bg-red-100 text-red-600']">▼</button>
+                            <button v-if="myPerms.can_remove_items" @click="deleteItem(item.id)"
+                                    class="w-8 h-8 rounded-full flex items-center justify-center text-gray-300 hover:bg-red-100 hover:text-red-500 transition opacity-0 group-hover:opacity-100">✕</button>
                         </div>
                     </div>
                 </div>
+                <p v-if="items.length === 0" class="text-gray-400 italic text-center mt-16">
+                    No items yet{{ myPerms.can_add_items ? ' — add one above!' : '.' }}
+                </p>
             </div>
-            
             <div v-else class="h-full flex items-center justify-center text-gray-400">
-                <p class="text-xl italic">Select or create a session on the left to start voting.</p>
+                <p class="text-xl italic">Create a session on the left, or open a shared link.</p>
             </div>
         </main>
     </div>
 
-    <script>
-        const { createApp } = Vue;
-        if (!localStorage.voterID) localStorage.voterID = Math.random().toString(36).substring(2);
+    <!-- ── Auth modal ──────────────────────────────────────────────────────── -->
+    <div v-if="showAuth"
+         class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+         @click.self="showAuth = null">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-8">
+            <h3 class="text-xl font-bold text-gray-800 mb-6">
+                {{ showAuth === 'register' ? 'Create account' : 'Sign in' }}
+            </h3>
+            <div class="flex flex-col gap-4">
+                <input v-model="authForm.username" placeholder="Username"
+                       class="border p-3 rounded-lg outline-blue-500 text-sm" @keyup.enter="submitAuth">
+                <input v-model="authForm.password" type="password" placeholder="Password"
+                       class="border p-3 rounded-lg outline-blue-500 text-sm" @keyup.enter="submitAuth">
+                <p v-if="authError" class="text-red-500 text-sm">{{ authError }}</p>
+                <button @click="submitAuth"
+                        class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded-lg transition">
+                    {{ showAuth === 'register' ? 'Create account' : 'Sign in' }}
+                </button>
+                <p class="text-center text-sm text-gray-500">
+                    <span v-if="showAuth === 'register'">
+                        Already have an account?
+                        <button @click="showAuth = 'login'; authError = ''" class="text-blue-600 hover:underline">Sign in</button>
+                    </span>
+                    <span v-else>
+                        No account yet?
+                        <button @click="showAuth = 'register'; authError = ''" class="text-blue-600 hover:underline">Sign up</button>
+                    </span>
+                </p>
+            </div>
+        </div>
+    </div>
 
-        createApp({
-            data() {
-                return {
-                    sessions: [],
-                    currentSession: null,
-                    items: [],
-                    newSessionName: '',
-                    newItemText: ''
-                }
-            },
-            watch: {
-                currentSession() { this.fetchItems(); }
-            },
-            methods: {
-                async fetchSessions() {
-                    const res = await fetch('/api/sessions');
-                    this.sessions = await res.json();
-                },
-                async createSession() {
-                    if (!this.newSessionName) return;
-                    await fetch('/api/sessions', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ name: this.newSessionName })
-                    });
-                    this.newSessionName = '';
-                    this.fetchSessions();
-                },
-                async fetchItems() {
-                    if (!this.currentSession) return;
-                    const res = await fetch(`/api/sessions/${this.currentSession.id}/items?voter_id=${localStorage.voterID}`);
-                    this.items = await res.json();
-                },
-                async addItem() {
-                    if (!this.newItemText || !this.currentSession) return;
-                    await fetch('/api/items', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ session_id: this.currentSession.id, text: this.newItemText })
-                    });
-                    this.newItemText = '';
-                    this.fetchItems();
-                },
-                async vote(id, val) {
-                    await fetch('/api/vote', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ item_id: id, voter_id: localStorage.voterID, value: val })
-                    });
-                    this.fetchItems();
-                }
-            },
-            mounted() { this.fetchSessions(); }
-        }).mount('#app');
-    </script>
+    <!-- ── Permissions modal ───────────────────────────────────────────────── -->
+    <div v-if="showPermissions"
+         class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+         @click.self="showPermissions = false">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between p-6 border-b">
+                <h3 class="text-xl font-bold text-gray-800">⚙️ Session Permissions</h3>
+                <button @click="showPermissions = false" class="text-gray-400 hover:text-gray-700 text-2xl leading-none">×</button>
+            </div>
+            <div class="overflow-y-auto flex-1 p-6">
+                <!-- Add user by username -->
+                <div class="flex gap-2 mb-6">
+                    <input v-model="addPermUsername" placeholder="Username..."
+                           class="flex-1 border p-2 rounded-lg text-sm outline-blue-500" @keyup.enter="findAndAddUser">
+                    <button @click="findAndAddUser"
+                            class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-500 transition">
+                        Add User
+                    </button>
+                </div>
+                <p v-if="addPermError" class="text-red-500 text-sm mb-4">{{ addPermError }}</p>
+
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-xs text-gray-500 uppercase border-b">
+                            <th class="pb-2 font-semibold w-1/4">User</th>
+                            <th class="pb-2 font-semibold text-center">View</th>
+                            <th class="pb-2 font-semibold text-center">Add Items</th>
+                            <th class="pb-2 font-semibold text-center">Vote</th>
+                            <th class="pb-2 font-semibold text-center">Remove Items</th>
+                            <th class="pb-2 font-semibold text-center">Delete Session</th>
+                            <th class="pb-2 font-semibold text-center">Edit Perms</th>
+                            <th class="pb-2 w-8"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="row in permRows" :key="row.user_id ?? 'public'"
+                            class="border-b last:border-0 hover:bg-gray-50">
+                            <td class="py-3 pr-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 text-xs font-bold">
+                                        {{ row.user_id === null ? '🌐' : row.username?.[0]?.toUpperCase() }}
+                                    </span>
+                                    <span class="font-medium text-gray-700">{{ row.user_id === null ? 'Anyone with link' : row.username }}</span>
+                                </div>
+                            </td>
+                            <td v-for="flag in permFlags" :key="flag" class="py-3 text-center">
+                                <input type="checkbox" :checked="!!row[flag]"
+                                       @change="row[flag] = $event.target.checked ? 1 : 0"
+                                       class="w-4 h-4 accent-blue-600 cursor-pointer">
+                            </td>
+                            <td class="py-3 text-center">
+                                <button @click="permRows = permRows.filter(r => r !== row)"
+                                        class="text-gray-300 hover:text-red-500 transition text-lg leading-none">×</button>
+                            </td>
+                        </tr>
+                        <tr v-if="permRows.length === 0">
+                            <td colspan="8" class="py-6 text-center text-gray-400 italic">No permission rows yet.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="p-6 border-t flex justify-end gap-3">
+                <button @click="showPermissions = false"
+                        class="px-5 py-2 rounded-lg border text-gray-600 hover:bg-gray-100 transition text-sm font-medium">Cancel</button>
+                <button @click="savePermissions"
+                        class="px-5 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition text-sm font-bold">Save</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+<script>
+const { createApp } = Vue;
+const PERM_FLAGS = ['can_view','can_add_items','can_vote','can_remove_items','can_remove_session','can_edit_permissions'];
+
+createApp({
+    data() {
+        return {
+            currentUser: null,
+            currentSession: null,
+            items: [],
+            myPerms: { can_view:0, can_add_items:0, can_vote:0, can_remove_items:0, can_remove_session:0, can_edit_permissions:0, is_owner:false },
+            newSessionName: '',
+            newItemText: '',
+            copied: false,
+            sortBy: 'score', sortAsc: false,
+            sortOptions: [
+                { value: 'score', label: 'Score' },
+                { value: 'name',  label: 'Name'  },
+                { value: 'vote',  label: 'My Vote' },
+            ],
+            // auth modal
+            showAuth: null,
+            authForm: { username: '', password: '' },
+            authError: '',
+            // permissions modal
+            showPermissions: false,
+            permRows: [],
+            permFlags: PERM_FLAGS,
+            addPermUsername: '',
+            addPermError: '',
+        };
+    },
+    computed: {
+        shareUrl() {
+            return this.currentSession
+                ? `${location.origin}${location.pathname}#${this.currentSession.hash}` : '';
+        },
+        sortedItems() {
+            const dir = this.sortAsc ? 1 : -1;
+            return [...this.items].sort((a, b) => {
+                if (this.sortBy === 'name')  return dir * a.text.localeCompare(b.text);
+                if (this.sortBy === 'score') return dir * ((a.score || 0) - (b.score || 0));
+                if (this.sortBy === 'vote')  return dir * ((a.user_vote || 0) - (b.user_vote || 0));
+                return 0;
+            });
+        },
+    },
+    watch: {
+        showPermissions(val) { if (val) this.fetchPermissions(); }
+    },
+    methods: {
+        // ── Auth ────────────────────────────────────────────────────────────────
+        async submitAuth() {
+            this.authError = '';
+            const endpoint = this.showAuth === 'register' ? '/api/auth/register' : '/api/auth/login';
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(this.authForm),
+            });
+            const data = await res.json();
+            if (!res.ok) { this.authError = data.error; return; }
+            this.currentUser = data;
+            this.authForm = { username: '', password: '' };
+            this.showAuth = null;
+            // Refresh permissions for the current session under the new identity
+            if (this.currentSession) {
+                await this.fetchMyPermissions();
+                await this.fetchItems();
+            }
+        },
+        async logout() {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            this.currentUser = null;
+            if (this.currentSession) {
+                await this.fetchMyPermissions();
+                await this.fetchItems();
+            }
+        },
+
+        // ── Session ──────────────────────────────────────────────────────────────
+        async loadFromHash() {
+            const hash = location.hash.slice(1);
+            if (!hash) { this.currentSession = null; this.items = []; this.myPerms = {}; return; }
+            const res = await fetch(`/api/sessions/by-hash/${hash}`);
+            if (res.ok) {
+                this.currentSession = await res.json();
+                await this.fetchMyPermissions();
+                await this.fetchItems();
+            } else if (res.status === 403) {
+                this.currentSession = null; this.items = [];
+                alert('You do not have permission to view this session.');
+                location.hash = '';
+            } else {
+                this.currentSession = null; this.items = [];
+                alert('Session not found. The link may be invalid or the session was deleted.');
+                location.hash = '';
+            }
+        },
+        async fetchMyPermissions() {
+            if (!this.currentSession) return;
+            const res = await fetch(`/api/sessions/${this.currentSession.hash}/my-permissions`);
+            this.myPerms = res.ok ? await res.json() : {};
+        },
+        async createSession() {
+            if (!this.newSessionName.trim()) return;
+            const res = await fetch('/api/sessions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: this.newSessionName.trim() }),
+            });
+            if (!res.ok) { alert((await res.json()).error); return; }
+            const { hash } = await res.json();
+            this.newSessionName = '';
+            location.hash = hash;
+        },
+        async fetchItems() {
+            if (!this.currentSession) return;
+            const anon = !this.currentUser ? `voter_id=${localStorage.voterID || ''}` : '';
+            const res = await fetch(`/api/sessions/${this.currentSession.hash}/items?${anon}`);
+            this.items = res.ok ? await res.json() : [];
+        },
+        async addItem() {
+            if (!this.newItemText.trim() || !this.currentSession) return;
+            await fetch('/api/items', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_hash: this.currentSession.hash, text: this.newItemText.trim() }),
+            });
+            this.newItemText = '';
+            this.fetchItems();
+        },
+        async vote(id, val) {
+            await fetch('/api/vote', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_id: id, value: val, voter_id: localStorage.voterID }),
+            });
+            this.fetchItems();
+        },
+        async deleteSession() {
+            if (!confirm(`Delete session "${this.currentSession.name}"? This cannot be undone.`)) return;
+            await fetch(`/api/sessions/${this.currentSession.hash}`, { method: 'DELETE' });
+            this.currentSession = null; this.items = []; location.hash = '';
+        },
+        async deleteItem(id) {
+            await fetch(`/api/items/${id}`, { method: 'DELETE' });
+            this.fetchItems();
+        },
+        async copyUrl() {
+            await navigator.clipboard.writeText(this.shareUrl);
+            this.copied = true;
+            setTimeout(() => this.copied = false, 2000);
+        },
+        setSort(value) {
+            if (this.sortBy === value) this.sortAsc = !this.sortAsc;
+            else { this.sortBy = value; this.sortAsc = value === 'name'; }
+        },
+
+        // ── Permissions ──────────────────────────────────────────────────────────
+        async fetchPermissions() {
+            const res = await fetch(`/api/sessions/${this.currentSession.hash}/permissions`);
+            this.permRows = res.ok ? await res.json() : [];
+        },
+        async findAndAddUser() {
+            this.addPermError = '';
+            const username = this.addPermUsername.trim();
+            if (!username) return;
+            const res = await fetch(`/api/users/by-username?username=${encodeURIComponent(username)}`);
+            if (!res.ok) { this.addPermError = `No user found with username "${username}".`; return; }
+            const user = await res.json();
+            if (this.permRows.some(r => r.user_id === user.id)) {
+                this.addPermError = 'That user already has a permission row.'; return;
+            }
+            this.permRows.push({
+                user_id: user.id, username: user.username,
+                can_view:1, can_add_items:0, can_vote:1,
+                can_remove_items:0, can_remove_session:0, can_edit_permissions:0,
+            });
+            this.addPermUsername = '';
+        },
+        async savePermissions() {
+            await fetch(`/api/sessions/${this.currentSession.hash}/permissions`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(this.permRows),
+            });
+            this.showPermissions = false;
+            await this.fetchMyPermissions();
+        },
+    },
+    async mounted() {
+        if (!localStorage.voterID) localStorage.voterID = Math.random().toString(36).substring(2);
+        const res = await fetch('/api/me');
+        this.currentUser = await res.json();
+        await this.loadFromHash();
+        window.addEventListener('hashchange', () => this.loadFromHash());
+    },
+}).mount('#app');
+</script>
 </body>
 </html>
